@@ -26,13 +26,37 @@ namespace JsonSsmConfiguration
 
         private static async Task Put(AmazonSimpleSystemsManagementClient client)
         {
-            var data = JObject.Parse(@"{""test"":{""Development"":{""somepath"":{""somevalue"":""valuevalue""},""anotherpath"":{""anothervalue"":369,""array"":[""val1"",""val2"",""val3""]},""case"":[{""id"":0},{""id"":1},{""id"":2}]}}}");
-            var parameters = FlattenAndFormatJson(data);
+            var data = JObject.Parse(@"{""ENCRYPT"":[""/test/Development/case"",""/test/Development/somepath/somevalue""],""test"":{""Development"":{""somepath"":{""somevalue"":""valuevalue""},""anotherpath"":{""anothervalue"":369,""array"":[""val1"",""val2"",""val3""]},""case"":[{""id"":0},{""id"":1},{""id"":2}]}}}");
+            var pathsToEncrypt = new List<JToken>();
+            if(data.ContainsKey("ENCRYPT"))
+            {
+                pathsToEncrypt = data
+                    .SelectTokens("ENCRYPT")
+                    .Children()
+                    .ToList();
+
+                data.Remove("ENCRYPT");
+            }
+
+            var parameters = FlattenAndFormatJson(data, out var stringLists);
 
             var requests = new PutParameterRequest[parameters.Count];
             var i = 0;
             foreach (var param in parameters)
             {
+                var paramType = ParameterType.String;
+                var encrypt = pathsToEncrypt.Any(pte => param.Key.StartsWith(pte.ToString()));
+                if(!encrypt)
+                {
+                    var list = stringLists.Any(sl => param.Key.Equals(sl));
+                    if (list) paramType = ParameterType.StringList;
+                }
+                else
+                {
+                    paramType = ParameterType.SecureString;
+                }
+
+                // TODO add options for this stuff that can be passed in
                 requests[i] = new PutParameterRequest
                 {
                     Name = param.Key,
@@ -40,7 +64,7 @@ namespace JsonSsmConfiguration
                     DataType = "text",
                     Overwrite = true,
                     Tier = ParameterTier.Standard,
-                    Type = ParameterType.String
+                    Type = paramType,
                 };
 
                 i++;
@@ -52,16 +76,16 @@ namespace JsonSsmConfiguration
                 if(response.HttpStatusCode.ToString() != "OK")
                 {
                     Console.WriteLine($"{response.HttpStatusCode} - Response status code does not indicat success" +
-                        $" for the parameter {request.Name}.");
+                        $" for the parameter {request.Type} {request.Name}.");
                 }
                 else
                 {
-                    Console.WriteLine($"{response.HttpStatusCode} - Success for parameter {request.Name}");
+                    Console.WriteLine($"{response.HttpStatusCode} - Success for parameter {request.Type} {request.Name}");
                 }
             }
         }
 
-        private static Dictionary<string,string> FlattenAndFormatJson(JObject data)
+        private static Dictionary<string,string> FlattenAndFormatJson(JObject data, out List<string> listType)
         {
             IEnumerable<JToken> jTokens = data.Descendants().Where(p => p.Count() == 0);
 
@@ -76,7 +100,7 @@ namespace JsonSsmConfiguration
 
                 // Yes, this is will cause a failure down the line if the index is >9
                 // TODO add logic to find the length of the number and remove appropriate characters
-                if (char.IsDigit(path[path.Length - 1]))
+                if (char.IsDigit(path[^1]))
                 {
                     path = path[0..^2];
 
@@ -108,6 +132,7 @@ namespace JsonSsmConfiguration
                 Console.WriteLine($"{item.Key}  :  {item.Value}");
             }
 
+            listType = stringLists.Select(kvp => kvp.Key).ToList();
             return merged;
         }
         private static void ConvertJsonToSsm(JObject json)
