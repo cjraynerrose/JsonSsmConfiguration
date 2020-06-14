@@ -18,15 +18,46 @@ namespace JsonSsmConfiguration
     {
         public static async Task Main(string[] args)
         {
-            var client = new AmazonSimpleSystemsManagementClient();
+            PrintHelp();
+            args = Console.ReadLine().Split(" ");
+            Menu(args);
+
+            //var client = new AmazonSimpleSystemsManagementClient();
 
             //await Get(client);
-            await Put(client);
+            //await Put(client);
         }
 
-        private static async Task Put(AmazonSimpleSystemsManagementClient client)
+        private static async Task Menu(string[] args)
         {
-            var data = JObject.Parse(@"{""ENCRYPT"":[""/test/Development/case"",""/test/Development/somepath/somevalue""],""test"":{""Development"":{""somepath"":{""somevalue"":""valuevalue""},""anotherpath"":{""anothervalue"":369,""array"":[""val1"",""val2"",""val3""]},""case"":[{""id"":0},{""id"":1},{""id"":2}]}}}");
+            switch(args[0].ToLowerInvariant())
+            {
+                case "get":
+                    await Get(args[1], args[2]);
+                    break;
+                case "put":
+                    await Put(args[1]);
+                    break;
+                default:
+                    PrintHelp();
+                    break;
+            }
+        }
+
+        private static void PrintHelp()
+        {
+            var helpText = File.ReadAllLines("Files/Helptext.txt");
+            foreach(var line in helpText)
+                Console.WriteLine(line);
+        }
+
+        private static async Task Put(string filePath)
+        {
+            var client = new AmazonSimpleSystemsManagementClient();
+
+            var jsonData = File.ReadAllText(filePath);
+
+            var data = JObject.Parse(jsonData);//JObject.Parse(@"{""ENCRYPT"":[""/test/Development/case"",""/test/Development/somepath/somevalue""],""test"":{""Development"":{""somepath"":{""somevalue"":""valuevalue""},""anotherpath"":{""anothervalue"":369,""array"":[""val1"",""val2"",""val3""]},""case"":[{""id"":0},{""id"":1},{""id"":2}]}}}");
             var pathsToEncrypt = new List<JToken>();
             if(data.ContainsKey("ENCRYPT"))
             {
@@ -127,40 +158,53 @@ namespace JsonSsmConfiguration
                 .OrderBy(k => k.Key)
                 .ToDictionary(k => k.Key, v => v.Value);
 
-            foreach (var item in merged)
-            {
-                Console.WriteLine($"{item.Key}  :  {item.Value}");
-            }
+            //foreach (var item in merged)
+            //{
+            //    Console.WriteLine($"{item.Key}  :  {item.Value}");
+            //}
 
             listType = stringLists.Select(kvp => kvp.Key).ToList();
             return merged;
         }
-        private static void ConvertJsonToSsm(JObject json)
-        {
 
-        }
-
-        private static async Task Get(AmazonSimpleSystemsManagementClient client)
+        private static async Task Get(string path, string outputPath)
         {
+            var client = new AmazonSimpleSystemsManagementClient();
             var request = new GetParametersByPathRequest
             {
-                Path = "/common-config/Development/Serilog",
+                Path = path,
                 Recursive = true,
                 WithDecryption = true
             };
 
-            var response = await client.GetParametersByPathAsync(request);
+            GetParametersByPathResponse response;
+            try
+            {
+                response = await client.GetParametersByPathAsync(request);
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
 
             var config = ConvertResponseToJson(response.Parameters);
             Console.WriteLine(config.ToString());
+            File.WriteAllText(outputPath, config.ToString());
         }
 
         private static JObject ConvertResponseToJson(List<Parameter> parameters)
         {
             var rows = new List<JObject>();
+            var secureStrings = new List<string>();
 
             foreach (var param in parameters)
             {
+                if(param.Type == ParameterType.SecureString)
+                {
+                    secureStrings.Add(param.Name);
+                }
+
                 // Find correct number of } to append
                 var braceCount = param.Name.Count(p => p == '/');
                 var append = "";
