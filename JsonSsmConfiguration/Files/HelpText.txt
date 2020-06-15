@@ -1,0 +1,7 @@
+﻿SSM JSON Converter
+	GET <path> [output-path]
+		<path> is the name of the SSM Parameter
+		[output-path] is the optional disk locaiton to output the result
+
+	PUT <file-path>
+		<file-path> is the location of the JSON file to convert
