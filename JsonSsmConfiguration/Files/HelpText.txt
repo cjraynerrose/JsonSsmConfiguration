@@ -5,3 +5,6 @@
 
 	PUT <file-path>
 		<file-path> is the location of the JSON file to convert
+
+	EXIT
+		End the application

@@ -11,37 +11,49 @@ using Amazon.SimpleSystemsManagement;
 using Amazon.SimpleSystemsManagement.Internal;
 using Amazon.SimpleSystemsManagement.Model;
 using Newtonsoft.Json.Linq;
+using ThirdParty.BouncyCastle.Asn1;
 
 namespace JsonSsmConfiguration
 {
     public class Program
     {
+        public static AmazonSimpleSystemsManagementClient client = new AmazonSimpleSystemsManagementClient();
+
         public static async Task Main(string[] args)
         {
             PrintHelp();
-            args = Console.ReadLine().Split(" ");
-            Menu(args);
-
-            //var client = new AmazonSimpleSystemsManagementClient();
-
-            //await Get(client);
-            //await Put(client);
+            await Menu();
         }
 
-        private static async Task Menu(string[] args)
+        private static async Task Menu()
         {
-            switch(args[0].ToLowerInvariant())
+            string[] input;
+            var exit = false;
+            do
             {
-                case "get":
-                    await Get(args[1], args[2]);
-                    break;
-                case "put":
-                    await Put(args[1]);
-                    break;
-                default:
-                    PrintHelp();
-                    break;
+                Console.Write("SSM<>JSON: ");
+                input = Console.ReadLine().Split(" ");
+                switch (input[0].ToLowerInvariant())
+                {
+                    case "get":
+                        if (input.Length == 3)
+                            await Get(input[1], input[2]);
+                        if (input.Length == 2)
+                            await Get(input[1], null);
+                        break;
+                    case "put":
+                        await Put(input[1]);
+                        break;
+                    case "exit":
+                        exit = true;
+                        break;
+                    default:
+                        PrintHelp();
+                        break;
+                }
             }
+            while (!exit);
+            
         }
 
         private static void PrintHelp()
@@ -53,11 +65,10 @@ namespace JsonSsmConfiguration
 
         private static async Task Put(string filePath)
         {
-            var client = new AmazonSimpleSystemsManagementClient();
-
             var jsonData = File.ReadAllText(filePath);
 
-            var data = JObject.Parse(jsonData);//JObject.Parse(@"{""ENCRYPT"":[""/test/Development/case"",""/test/Development/somepath/somevalue""],""test"":{""Development"":{""somepath"":{""somevalue"":""valuevalue""},""anotherpath"":{""anothervalue"":369,""array"":[""val1"",""val2"",""val3""]},""case"":[{""id"":0},{""id"":1},{""id"":2}]}}}");
+            var data = JObject.Parse(jsonData);
+            //var data = JObject.Parse(@"{""ENCRYPT"":[""/test/Development/case"",""/test/Development/somepath/somevalue""],""test"":{""Development"":{""somepath"":{""somevalue"":""valuevalue""},""anotherpath"":{""anothervalue"":369,""array"":[""val1"",""val2"",""val3""]},""case"":[{""id"":0},{""id"":1},{""id"":2}]}}}");
             var pathsToEncrypt = new List<JToken>();
             if(data.ContainsKey("ENCRYPT"))
             {
@@ -169,13 +180,50 @@ namespace JsonSsmConfiguration
 
         private static async Task Get(string path, string outputPath)
         {
-            var client = new AmazonSimpleSystemsManagementClient();
+
             var request = new GetParametersByPathRequest
             {
                 Path = path,
                 Recursive = true,
                 WithDecryption = true
             };
+
+            var parameters = await RequestParametersRecursive(request);
+
+            var config = ConvertResponseToJson(parameters);
+            Console.WriteLine(config.ToString());
+            if(!string.IsNullOrWhiteSpace(outputPath))
+                File.WriteAllText(outputPath, config.ToString());
+        }
+
+        private static async Task<List<Parameter>> RequestParametersRecursive(GetParametersByPathRequest request)
+        {
+            List<Parameter> parameters = new List<Parameter>();
+            bool hasToken = false;
+            do
+            {
+                var response = await RequestParameters(request);
+                if (response.HttpStatusCode.ToString() != ("OK"))
+                    throw new Exception("Went Wrong");
+
+                parameters.AddRange(response.Parameters);
+
+                if(!string.IsNullOrWhiteSpace(response.NextToken))
+                {
+                    hasToken = true;
+                    request.NextToken = response.NextToken;
+                }
+                else
+                {
+                    hasToken = false;
+                }
+            }
+            while (hasToken);
+
+            return parameters;
+        }
+        private static async Task<GetParametersByPathResponse> RequestParameters(GetParametersByPathRequest request)
+        {
 
             GetParametersByPathResponse response;
             try
@@ -188,9 +236,7 @@ namespace JsonSsmConfiguration
                 throw;
             }
 
-            var config = ConvertResponseToJson(response.Parameters);
-            Console.WriteLine(config.ToString());
-            File.WriteAllText(outputPath, config.ToString());
+            return response;
         }
 
         private static JObject ConvertResponseToJson(List<Parameter> parameters)
@@ -236,7 +282,15 @@ namespace JsonSsmConfiguration
 
                 // Add leading {" then add the value with a seperator and append correct number of }
                 path = $"{prepender}{path}{finalSeperator}{value}{finalCloser}{append}";
-                rows.Add(JObject.Parse(path));
+
+                try
+                {
+                    rows.Add(JObject.Parse(path));
+                }
+                catch (Exception e)
+                {
+                    throw e;
+                }
             }
 
             var json = rows[0];
