@@ -33,16 +33,14 @@ namespace JsonSsmConfiguration
             {
                 Console.Write("SSM<>JSON: ");
                 input = Console.ReadLine().Split(" ");
+                IRequest request = null;
                 switch (input[0].ToLowerInvariant())
                 {
                     case "get":
-                        if (input.Length == 3)
-                            await Get(input[1], input[2]);
-                        if (input.Length == 2)
-                            await Get(input[1], null);
+                        request = new Get(client);
                         break;
                     case "put":
-                        await Put(input[1]);
+                        request = new Put(client);
                         break;
                     case "exit":
                         exit = true;
@@ -51,6 +49,9 @@ namespace JsonSsmConfiguration
                         PrintHelp();
                         break;
                 }
+
+                if(request != null)
+                    await request.Request(input);
             }
             while (!exit);
             
@@ -63,69 +64,7 @@ namespace JsonSsmConfiguration
                 Console.WriteLine(line);
         }
 
-        private static async Task Put(string filePath)
-        {
-            var jsonData = File.ReadAllText(filePath);
-
-            var data = JObject.Parse(jsonData);
-            //var data = JObject.Parse(@"{""ENCRYPT"":[""/test/Development/case"",""/test/Development/somepath/somevalue""],""test"":{""Development"":{""somepath"":{""somevalue"":""valuevalue""},""anotherpath"":{""anothervalue"":369,""array"":[""val1"",""val2"",""val3""]},""case"":[{""id"":0},{""id"":1},{""id"":2}]}}}");
-            var pathsToEncrypt = new List<JToken>();
-            if(data.ContainsKey("ENCRYPT"))
-            {
-                pathsToEncrypt = data
-                    .SelectTokens("ENCRYPT")
-                    .Children()
-                    .ToList();
-
-                data.Remove("ENCRYPT");
-            }
-
-            var parameters = FlattenAndFormatJson(data, out var stringLists);
-
-            var requests = new PutParameterRequest[parameters.Count];
-            var i = 0;
-            foreach (var param in parameters)
-            {
-                var paramType = ParameterType.String;
-                var encrypt = pathsToEncrypt.Any(pte => param.Key.StartsWith(pte.ToString()));
-                if(!encrypt)
-                {
-                    var list = stringLists.Any(sl => param.Key.Equals(sl));
-                    if (list) paramType = ParameterType.StringList;
-                }
-                else
-                {
-                    paramType = ParameterType.SecureString;
-                }
-
-                // TODO add options for this stuff that can be passed in
-                requests[i] = new PutParameterRequest
-                {
-                    Name = param.Key,
-                    Value = param.Value,
-                    DataType = "text",
-                    Overwrite = true,
-                    Tier = ParameterTier.Standard,
-                    Type = paramType,
-                };
-
-                i++;
-            }
-
-            foreach (var request in requests)
-            {
-                var response = await client.PutParameterAsync(request);
-                if(response.HttpStatusCode.ToString() != "OK")
-                {
-                    Console.WriteLine($"{response.HttpStatusCode} - Response status code does not indicat success" +
-                        $" for the parameter {request.Type} {request.Name}.");
-                }
-                else
-                {
-                    Console.WriteLine($"{response.HttpStatusCode} - Success for parameter {request.Type} {request.Name}");
-                }
-            }
-        }
+        
 
         private static Dictionary<string,string> FlattenAndFormatJson(JObject data, out List<string> listType)
         {
@@ -178,66 +117,7 @@ namespace JsonSsmConfiguration
             return merged;
         }
 
-        private static async Task Get(string path, string outputPath)
-        {
-
-            var request = new GetParametersByPathRequest
-            {
-                Path = path,
-                Recursive = true,
-                WithDecryption = true
-            };
-
-            var parameters = await RequestParametersRecursive(request);
-
-            var config = ConvertResponseToJson(parameters);
-            Console.WriteLine(config.ToString());
-            if(!string.IsNullOrWhiteSpace(outputPath))
-                File.WriteAllText(outputPath, config.ToString());
-        }
-
-        private static async Task<List<Parameter>> RequestParametersRecursive(GetParametersByPathRequest request)
-        {
-            List<Parameter> parameters = new List<Parameter>();
-            bool hasToken = false;
-            do
-            {
-                var response = await RequestParameters(request);
-                if (response.HttpStatusCode.ToString() != ("OK"))
-                    throw new Exception("Went Wrong");
-
-                parameters.AddRange(response.Parameters);
-
-                if(!string.IsNullOrWhiteSpace(response.NextToken))
-                {
-                    hasToken = true;
-                    request.NextToken = response.NextToken;
-                }
-                else
-                {
-                    hasToken = false;
-                }
-            }
-            while (hasToken);
-
-            return parameters;
-        }
-        private static async Task<GetParametersByPathResponse> RequestParameters(GetParametersByPathRequest request)
-        {
-
-            GetParametersByPathResponse response;
-            try
-            {
-                response = await client.GetParametersByPathAsync(request);
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e);
-                throw;
-            }
-
-            return response;
-        }
+        
 
         private static JObject ConvertResponseToJson(List<Parameter> parameters)
         {
